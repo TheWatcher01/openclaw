@@ -12,6 +12,22 @@ type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[num
 const mentionedThreads = new Map<string, number>();
 const MENTION_TTL_MS = 5 * 60 * 1000;
 
+function validateForwarderUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Invalid SLACK_FORWARDER_URL: ${url}`);
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error(`SLACK_FORWARDER_URL must use HTTPS`);
+  }
+  const blocked = /^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|localhost$)/i;
+  if (blocked.test(parsed.hostname)) {
+    throw new Error(`SLACK_FORWARDER_URL targets private address: ${parsed.hostname}`);
+  }
+}
+
 function cleanExpiredMentions(): void {
   const now = Date.now();
   for (const [key, ts] of mentionedThreads) {
@@ -46,6 +62,7 @@ export default function register(api: OpenClawPluginApi) {
     process.env.SLACK_FORWARDER_URL ??
     "http://slack-forwarder:8750"
   ).replace(/\/$/, "");
+  validateForwarderUrl(forwarderUrl);
 
   const abTestChannels = new Set(
     pluginCfg.abTestChannels ??
@@ -102,12 +119,15 @@ export default function register(api: OpenClawPluginApi) {
 
     // Try to claim ownership via the forwarder HTTP API.
     try {
-      const resp = await fetch(`${forwarderUrl}/api/v1/ownership/${channelId}/${threadTs}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent_id: agentId }),
-        signal: AbortSignal.timeout(3000),
-      });
+      const resp = await fetch(
+        `${forwarderUrl}/api/v1/ownership/${encodeURIComponent(channelId)}/${encodeURIComponent(threadTs)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ agent_id: agentId }),
+          signal: AbortSignal.timeout(3000),
+        },
+      );
 
       if (resp.ok) {
         // We own it (or just claimed it), proceed.

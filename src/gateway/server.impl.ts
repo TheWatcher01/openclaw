@@ -569,7 +569,19 @@ export async function startGatewayServer(
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
 
   // Create auth rate limiters used by connect/auth flows.
-  const rateLimitConfig = cfgAtStart.gateway?.auth?.rateLimit;
+  // Auto-enable rate limiting for non-loopback bindings when not explicitly configured.
+  const effectiveBindMode = opts.bind ?? cfgAtStart.gateway?.bind ?? "loopback";
+  const rateLimitConfig = (() => {
+    const configured = cfgAtStart.gateway?.auth?.rateLimit;
+    if (effectiveBindMode !== "loopback" && !configured) {
+      log.warn(
+        "[security] Rate limiting auto-enabled for non-loopback binding " +
+          `(bind=${effectiveBindMode}). Configure gateway.auth.rateLimit to suppress this warning.`,
+      );
+      return { maxAttempts: 10, windowMs: 60_000, lockoutMs: 300_000 };
+    }
+    return configured;
+  })();
   const { rateLimiter: authRateLimiter, browserRateLimiter: browserAuthRateLimiter } =
     createGatewayAuthRateLimiters(rateLimitConfig);
 

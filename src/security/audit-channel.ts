@@ -7,6 +7,7 @@ import type { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { CHANNEL } from "../config/channel-names.js";
 import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
@@ -386,7 +387,7 @@ export async function collectChannelSecurityFindings(params: {
         });
       }
 
-      if (plugin.id === "discord") {
+      if (plugin.id === CHANNEL.DISCORD) {
         const { isDiscordMutableAllowEntry, readChannelAllowFromStore } =
           await loadAuditChannelRuntimeModule();
         const discordCfg =
@@ -394,7 +395,7 @@ export async function collectChannelSecurityFindings(params: {
           ({} as Record<string, unknown>);
         const dangerousNameMatchingEnabled = isDangerousNameMatchingEnabled(discordCfg);
         const storeAllowFrom = await readChannelAllowFromStore(
-          "discord",
+          CHANNEL.DISCORD,
           process.env,
           accountId,
         ).catch(() => []);
@@ -476,14 +477,14 @@ export async function collectChannelSecurityFindings(params: {
           });
         }
         const nativeEnabled = resolveNativeCommandsEnabled({
-          providerId: "discord",
+          providerId: CHANNEL.DISCORD,
           providerSetting: coerceNativeSetting(
             (discordCfg.commands as { native?: unknown } | undefined)?.native,
           ),
           globalSetting: params.cfg.commands?.native,
         });
         const nativeSkillsEnabled = resolveNativeSkillsEnabled({
-          providerId: "discord",
+          providerId: CHANNEL.DISCORD,
           providerSetting: coerceNativeSetting(
             (discordCfg.commands as { nativeSkills?: unknown } | undefined)?.nativeSkills,
           ),
@@ -598,20 +599,20 @@ export async function collectChannelSecurityFindings(params: {
         }
       }
 
-      if (plugin.id === "slack") {
+      if (plugin.id === CHANNEL.SLACK) {
         const { readChannelAllowFromStore } = await loadAuditChannelRuntimeModule();
         const slackCfg =
           (account as { config?: Record<string, unknown>; dm?: Record<string, unknown> } | null)
             ?.config ?? ({} as Record<string, unknown>);
         const nativeEnabled = resolveNativeCommandsEnabled({
-          providerId: "slack",
+          providerId: CHANNEL.SLACK,
           providerSetting: coerceNativeSetting(
             (slackCfg.commands as { native?: unknown } | undefined)?.native,
           ),
           globalSetting: params.cfg.commands?.native,
         });
         const nativeSkillsEnabled = resolveNativeSkillsEnabled({
-          providerId: "slack",
+          providerId: CHANNEL.SLACK,
           providerSetting: coerceNativeSetting(
             (slackCfg.commands as { nativeSkills?: unknown } | undefined)?.nativeSkills,
           ),
@@ -648,7 +649,7 @@ export async function collectChannelSecurityFindings(params: {
                 ? legacyAllowFromRaw
                 : [];
             const storeAllowFrom = await readChannelAllowFromStore(
-              "slack",
+              CHANNEL.SLACK,
               process.env,
               accountId,
             ).catch(() => []);
@@ -715,7 +716,7 @@ export async function collectChannelSecurityFindings(params: {
         }
       }
 
-      if (plugin.id !== "telegram") {
+      if (plugin.id !== CHANNEL.TELEGRAM) {
         continue;
       }
 
@@ -740,7 +741,7 @@ export async function collectChannelSecurityFindings(params: {
 
       const { readChannelAllowFromStore } = await loadAuditChannelRuntimeModule();
       const storeAllowFrom = await readChannelAllowFromStore(
-        "telegram",
+        CHANNEL.TELEGRAM,
         process.env,
         accountId,
       ).catch(() => []);
@@ -838,7 +839,7 @@ export async function collectChannelSecurityFindings(params: {
           // oxlint-disable-next-line typescript/no-explicit-any
           ?.nativeSkills as any;
         const skillsEnabled = resolveNativeSkillsEnabled({
-          providerId: "telegram",
+          providerId: CHANNEL.TELEGRAM,
           providerSetting,
           globalSetting: params.cfg.commands?.nativeSkills,
         });
