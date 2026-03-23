@@ -286,6 +286,31 @@ export async function fillFormViaPlaywright(opts: {
   }
 }
 
+function validateBrowserFnBody(fn: string): void {
+  const dangerous = [
+    /\bfetch\s*\(/i,
+    /\bXMLHttpRequest\b/i,
+    /\bWebSocket\s*\(/i,
+    /\bdocument\.cookie\b/i,
+    /\blocalStorage\b/i,
+    /\bsessionStorage\b/i,
+    /\bindexedDB\b/i,
+    /\bnavigator\.sendBeacon\b/i,
+    /\bimport\s*\(/i,
+    /\brequire\s*\(/i,
+    /\beval\s*\(/i,
+    /\bnew\s+Function\s*\(/i,
+  ];
+  for (const pattern of dangerous) {
+    if (pattern.test(fn)) {
+      throw new Error(
+        `Browser fn contains dangerous pattern (${pattern.source}). ` +
+          `Requires human approval. Set browser.evaluateRequiresApproval=true.`,
+      );
+    }
+  }
+}
+
 export async function evaluateViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -298,6 +323,7 @@ export async function evaluateViaPlaywright(opts: {
   if (!fnText) {
     throw new Error("function is required");
   }
+  validateBrowserFnBody(fnText);
   const page = await getRestoredPageForTarget(opts);
   // Clamp evaluate timeout to prevent permanently blocking Playwright's command queue.
   // Without this, a long-running async evaluate blocks all subsequent page operations

@@ -121,7 +121,14 @@ function parseOpenAiBatchOutput(text: string): OpenAiBatchOutputLine[] {
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
-    .map((line) => JSON.parse(line) as OpenAiBatchOutputLine);
+    .map((line) => {
+      try {
+        return JSON.parse(line) as OpenAiBatchOutputLine;
+      } catch {
+        return null; // ligne malformée ignorée
+      }
+    })
+    .filter((item): item is OpenAiBatchOutputLine => item !== null);
 }
 
 async function readOpenAiBatchError(params: {

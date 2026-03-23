@@ -1,3 +1,4 @@
+import { CHANNEL } from "../config/channel-names.js";
 import { createDedupeCache } from "../infra/dedupe.js";
 import {
   dispatchDiscordInteractiveHandler,
@@ -99,20 +100,20 @@ export function registerPluginInteractiveHandler(
       error: `Interactive handler namespace "${namespace}" already registered by plugin "${existing.pluginId}"`,
     };
   }
-  if (registration.channel === "telegram") {
+  if (registration.channel === CHANNEL.TELEGRAM) {
     interactiveHandlers.set(key, {
       ...registration,
       namespace,
-      channel: "telegram",
+      channel: CHANNEL.TELEGRAM,
       pluginId,
       pluginName: opts?.pluginName,
       pluginRoot: opts?.pluginRoot,
     });
-  } else if (registration.channel === "slack") {
+  } else if (registration.channel === CHANNEL.SLACK) {
     interactiveHandlers.set(key, {
       ...registration,
       namespace,
-      channel: "slack",
+      channel: CHANNEL.SLACK,
       pluginId,
       pluginName: opts?.pluginName,
       pluginRoot: opts?.pluginRoot,
@@ -121,7 +122,7 @@ export function registerPluginInteractiveHandler(
     interactiveHandlers.set(key, {
       ...registration,
       namespace,
-      channel: "discord",
+      channel: CHANNEL.DISCORD,
       pluginId,
       pluginName: opts?.pluginName,
       pluginRoot: opts?.pluginRoot,
@@ -199,7 +200,7 @@ export async function dispatchPluginInteractiveHandler(params: {
   }
 
   const dedupeKey =
-    params.channel === "telegram" ? params.callbackId?.trim() : params.interactionId?.trim();
+    params.channel === CHANNEL.TELEGRAM ? params.callbackId?.trim() : params.interactionId?.trim();
   if (dedupeKey && callbackDedupe.peek(dedupeKey)) {
     return { matched: true, handled: true, duplicate: true };
   }
@@ -208,7 +209,7 @@ export async function dispatchPluginInteractiveHandler(params: {
     | ReturnType<PluginInteractiveTelegramHandlerRegistration["handler"]>
     | ReturnType<PluginInteractiveDiscordHandlerRegistration["handler"]>
     | ReturnType<PluginInteractiveSlackHandlerRegistration["handler"]>;
-  if (params.channel === "telegram") {
+  if (params.channel === CHANNEL.TELEGRAM) {
     result = dispatchTelegramInteractiveHandler({
       registration: match.registration as RegisteredInteractiveHandler &
         PluginInteractiveTelegramHandlerRegistration,
@@ -218,7 +219,7 @@ export async function dispatchPluginInteractiveHandler(params: {
       ctx: params.ctx as TelegramInteractiveDispatchContext,
       respond: params.respond as PluginInteractiveTelegramHandlerContext["respond"],
     });
-  } else if (params.channel === "discord") {
+  } else if (params.channel === CHANNEL.DISCORD) {
     result = dispatchDiscordInteractiveHandler({
       registration: match.registration as RegisteredInteractiveHandler &
         PluginInteractiveDiscordHandlerRegistration,

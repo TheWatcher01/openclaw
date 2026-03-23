@@ -997,9 +997,7 @@ export async function runDueJobs(state: CronServiceState) {
   }
   const now = state.deps.nowMs();
   const due = collectRunnableJobs(state, now);
-  for (const job of due) {
-    await executeJob(state, job, now, { forced: false });
-  }
+  await Promise.allSettled(due.map((job) => executeJob(state, job, now, { forced: false })));
 }
 
 export async function executeJobCore(

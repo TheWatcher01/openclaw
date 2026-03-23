@@ -1,4 +1,5 @@
 import type { ChannelId } from "../../channels/plugins/types.js";
+import { CHANNEL } from "../../config/channel-names.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -150,7 +151,7 @@ export async function resolveDeliveryTarget(
   }
 
   let allowFromOverride: string[] | undefined;
-  if (channel === "whatsapp") {
+  if (channel === CHANNEL.WHATSAPP) {
     const resolvedAccountId = normalizeAccountId(accountId);
     const configuredAllowFromRaw =
       resolveWhatsAppAccount({ cfg, accountId: resolvedAccountId }).allowFrom ?? [];
@@ -159,7 +160,11 @@ export async function resolveDeliveryTarget(
       .filter((entry) => entry && entry !== "*")
       .map((entry) => normalizeWhatsAppTarget(entry))
       .filter((entry): entry is string => Boolean(entry));
-    const storeAllowFrom = readChannelAllowFromStoreSync("whatsapp", process.env, resolvedAccountId)
+    const storeAllowFrom = readChannelAllowFromStoreSync(
+      CHANNEL.WHATSAPP,
+      process.env,
+      resolvedAccountId,
+    )
       .map((entry) => normalizeWhatsAppTarget(entry))
       .filter((entry): entry is string => Boolean(entry));
     allowFromOverride = [...new Set([...configuredAllowFrom, ...storeAllowFrom])];

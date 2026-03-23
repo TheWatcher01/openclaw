@@ -132,7 +132,14 @@ async function readVoyageBatchError(params: {
             .split("\n")
             .map((line) => line.trim())
             .filter(Boolean)
-            .map((line) => JSON.parse(line) as VoyageBatchOutputLine);
+            .map((line) => {
+              try {
+                return JSON.parse(line) as VoyageBatchOutputLine;
+              } catch {
+                return null; // ligne malformée ignorée
+              }
+            })
+            .filter((item): item is VoyageBatchOutputLine => item !== null);
           return extractBatchErrorMessage(lines);
         },
       }),

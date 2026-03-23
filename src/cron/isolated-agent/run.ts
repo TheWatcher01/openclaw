@@ -97,6 +97,20 @@ export type RunCronAgentTurnResult = {
 
 type ResolvedAgentConfig = NonNullable<ReturnType<typeof resolveAgentConfig>>;
 
+// Guard: test flags forbidden in production — must never be active outside a dev/test environment.
+if (process.env.NODE_ENV === "production") {
+  const unsafeTestFlags = ["OPENCLAW_TEST_FAST", "OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX"].filter(
+    (flag) => process.env[flag] === "1",
+  );
+
+  if (unsafeTestFlags.length > 0) {
+    throw new Error(
+      `[SECURITY] Test flags active in production environment: ${unsafeTestFlags.join(", ")}. ` +
+        `Remove these from your environment variables.`,
+    );
+  }
+}
+
 function extractCronAgentDefaultsOverride(agentConfigOverride?: ResolvedAgentConfig) {
   const {
     model: overrideModel,

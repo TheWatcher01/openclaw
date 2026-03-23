@@ -13,7 +13,14 @@ import type {
   TerminationReason,
 } from "./types.js";
 
-const log = createSubsystemLogger("process/supervisor");
+interface ProcessSupervisorDeps {
+  logger?: {
+    info: (msg: string, ...args: unknown[]) => void;
+    warn: (msg: string, ...args: unknown[]) => void;
+    error: (msg: string, ...args: unknown[]) => void;
+    debug: (msg: string, ...args: unknown[]) => void;
+  };
+}
 
 type ActiveRun = {
   run: ManagedRun;
@@ -31,7 +38,8 @@ function isTimeoutReason(reason: TerminationReason) {
   return reason === "overall-timeout" || reason === "no-output-timeout";
 }
 
-export function createProcessSupervisor(): ProcessSupervisor {
+export function createProcessSupervisor(deps?: ProcessSupervisorDeps): ProcessSupervisor {
+  const log = deps?.logger ?? createSubsystemLogger("process/supervisor");
   const registry = createRunRegistry();
   const active = new Map<string, ActiveRun>();
 

@@ -303,8 +303,10 @@ async function installBundleFromSourceDir(
       );
     }
   } catch (err) {
-    logger.warn?.(
-      `Bundle "${pluginId}" code safety scan failed (${String(err)}). Installation continues; run "openclaw security audit --deep" after install.`,
+    throw new Error(
+      `Security scan failed for plugin "${pluginId}": ${String(err)}. ` +
+        `Installation blocked. Run "openclaw security audit --deep" to investigate.`,
+      { cause: err },
     );
   }
 
@@ -509,8 +511,10 @@ async function installPluginFromPackageDir(
       );
     }
   } catch (err) {
-    logger.warn?.(
-      `Plugin "${pluginId}" code safety scan failed (${String(err)}). Installation continues; run "openclaw security audit --deep" after install.`,
+    throw new Error(
+      `Security scan failed for plugin "${pluginId}": ${String(err)}. ` +
+        `Installation blocked. Run "openclaw security audit --deep" to investigate.`,
+      { cause: err },
     );
   }
 

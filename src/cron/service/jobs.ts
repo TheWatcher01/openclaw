@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { CHANNEL } from "../../config/channel-names.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import {
@@ -201,7 +202,7 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
   if (!isIsolatedLike) {
     throw new Error('cron channel delivery config is only supported for sessionTarget="isolated"');
   }
-  if (job.delivery.channel === "telegram") {
+  if (job.delivery.channel === CHANNEL.TELEGRAM) {
     const telegramError = validateTelegramDeliveryTarget(job.delivery.to);
     if (telegramError) {
       throw new Error(telegramError);

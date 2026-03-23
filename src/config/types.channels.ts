@@ -66,6 +66,6 @@ export type ChannelsConfig = {
   imessage?: IMessageConfig;
   msteams?: MSTeamsConfig;
   // Extension channels use dynamic keys - use ExtensionChannelConfig in extensions
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  [key: string]: any;
+  // TODO: remplacer par des types précis par canal
+  [key: string]: unknown;
 };

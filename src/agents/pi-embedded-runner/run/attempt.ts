@@ -736,17 +736,19 @@ function trimWhitespaceFromToolCallNamesInMessage(
   normalizeToolCallIdsInMessage(message);
 }
 
-function wrapStreamTrimToolCallNames(
-  stream: ReturnType<typeof streamSimple>,
-  allowedToolNames?: Set<string>,
-): ReturnType<typeof streamSimple> {
-  const originalResult = stream.result.bind(stream);
-  stream.result = async () => {
-    const message = await originalResult();
-    trimWhitespaceFromToolCallNamesInMessage(message, allowedToolNames);
-    return message;
-  };
+// ---------------------------------------------------------------------------
+// Stream wrapper helpers — shared boilerplate
+// ---------------------------------------------------------------------------
 
+/**
+ * Patches `stream[Symbol.asyncIterator]` in-place, calling `onEvent` for every
+ * non-done chunk. Eliminates the ~15-line iterator-override boilerplate that
+ * was previously duplicated across every wrapStream* function.
+ */
+function patchStreamAsyncIterator(
+  stream: ReturnType<typeof streamSimple>,
+  onEvent: (event: Record<string, unknown>) => void,
+): void {
   const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
   (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
     function () {
@@ -755,12 +757,7 @@ function wrapStreamTrimToolCallNames(
         async next() {
           const result = await iterator.next();
           if (!result.done && result.value && typeof result.value === "object") {
-            const event = result.value as {
-              partial?: unknown;
-              message?: unknown;
-            };
-            trimWhitespaceFromToolCallNamesInMessage(event.partial, allowedToolNames);
-            trimWhitespaceFromToolCallNamesInMessage(event.message, allowedToolNames);
+            onEvent(result.value as Record<string, unknown>);
           }
           return result;
         },
@@ -772,7 +769,40 @@ function wrapStreamTrimToolCallNames(
         },
       };
     };
+}
 
+/**
+ * Creates a `StreamFn` wrapper that applies `wrap` to the resolved stream,
+ * handling both synchronous and promise-returning base functions.
+ * Eliminates the ~8-line wrapStreamFn* boilerplate duplicated 3 times.
+ */
+function makeStreamFnWrapper(
+  baseFn: StreamFn,
+  wrap: (stream: ReturnType<typeof streamSimple>) => ReturnType<typeof streamSimple>,
+): StreamFn {
+  return (model, context, options) => {
+    const maybeStream = baseFn(model, context, options);
+    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
+      return Promise.resolve(maybeStream).then(wrap);
+    }
+    return wrap(maybeStream);
+  };
+}
+
+function wrapStreamTrimToolCallNames(
+  stream: ReturnType<typeof streamSimple>,
+  allowedToolNames?: Set<string>,
+): ReturnType<typeof streamSimple> {
+  const originalResult = stream.result.bind(stream);
+  stream.result = async () => {
+    const message = await originalResult();
+    trimWhitespaceFromToolCallNamesInMessage(message, allowedToolNames);
+    return message;
+  };
+  patchStreamAsyncIterator(stream, (event) => {
+    trimWhitespaceFromToolCallNamesInMessage(event["partial"], allowedToolNames);
+    trimWhitespaceFromToolCallNamesInMessage(event["message"], allowedToolNames);
+  });
   return stream;
 }
 
@@ -780,15 +810,9 @@ export function wrapStreamFnTrimToolCallNames(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
 ): StreamFn {
-  return (model, context, options) => {
-    const maybeStream = baseFn(model, context, options);
-    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then((stream) =>
-        wrapStreamTrimToolCallNames(stream, allowedToolNames),
-      );
-    }
-    return wrapStreamTrimToolCallNames(maybeStream, allowedToolNames);
-  };
+  return makeStreamFnWrapper(baseFn, (stream) =>
+    wrapStreamTrimToolCallNames(stream, allowedToolNames),
+  );
 }
 
 function extractBalancedJsonPrefix(raw: string): string | null {
@@ -965,102 +989,68 @@ function wrapStreamRepairMalformedToolCallArguments(
     loggedRepairIndices.clear();
     return message;
   };
-
-  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
-  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
-    function () {
-      const iterator = originalAsyncIterator();
-      return {
-        async next() {
-          const result = await iterator.next();
-          if (!result.done && result.value && typeof result.value === "object") {
-            const event = result.value as {
-              type?: unknown;
-              contentIndex?: unknown;
-              delta?: unknown;
-              partial?: unknown;
-              message?: unknown;
-              toolCall?: unknown;
-            };
-            if (
-              typeof event.contentIndex === "number" &&
-              Number.isInteger(event.contentIndex) &&
-              event.type === "toolcall_delta" &&
-              typeof event.delta === "string"
-            ) {
-              if (disabledIndices.has(event.contentIndex)) {
-                return result;
-              }
-              const nextPartialJson =
-                (partialJsonByIndex.get(event.contentIndex) ?? "") + event.delta;
-              if (nextPartialJson.length > MAX_TOOLCALL_REPAIR_BUFFER_CHARS) {
-                partialJsonByIndex.delete(event.contentIndex);
-                repairedArgsByIndex.delete(event.contentIndex);
-                disabledIndices.add(event.contentIndex);
-                return result;
-              }
-              partialJsonByIndex.set(event.contentIndex, nextPartialJson);
-              if (shouldAttemptMalformedToolCallRepair(nextPartialJson, event.delta)) {
-                const repair = tryParseMalformedToolCallArguments(nextPartialJson);
-                if (repair) {
-                  repairedArgsByIndex.set(event.contentIndex, repair.args);
-                  repairToolCallArgumentsInMessage(event.partial, event.contentIndex, repair.args);
-                  repairToolCallArgumentsInMessage(event.message, event.contentIndex, repair.args);
-                  if (!loggedRepairIndices.has(event.contentIndex)) {
-                    loggedRepairIndices.add(event.contentIndex);
-                    log.warn(
-                      `repairing kimi-coding tool call arguments after ${repair.trailingSuffix.length} trailing chars`,
-                    );
-                  }
-                } else {
-                  repairedArgsByIndex.delete(event.contentIndex);
-                  clearToolCallArgumentsInMessage(event.partial, event.contentIndex);
-                  clearToolCallArgumentsInMessage(event.message, event.contentIndex);
-                }
-              }
-            }
-            if (
-              typeof event.contentIndex === "number" &&
-              Number.isInteger(event.contentIndex) &&
-              event.type === "toolcall_end"
-            ) {
-              const repairedArgs = repairedArgsByIndex.get(event.contentIndex);
-              if (repairedArgs) {
-                if (event.toolCall && typeof event.toolCall === "object") {
-                  (event.toolCall as { arguments?: unknown }).arguments = repairedArgs;
-                }
-                repairToolCallArgumentsInMessage(event.partial, event.contentIndex, repairedArgs);
-                repairToolCallArgumentsInMessage(event.message, event.contentIndex, repairedArgs);
-              }
-              partialJsonByIndex.delete(event.contentIndex);
-              disabledIndices.delete(event.contentIndex);
-              loggedRepairIndices.delete(event.contentIndex);
-            }
+  patchStreamAsyncIterator(stream, (event) => {
+    if (
+      typeof event["contentIndex"] === "number" &&
+      Number.isInteger(event["contentIndex"]) &&
+      event["type"] === "toolcall_delta" &&
+      typeof event["delta"] === "string"
+    ) {
+      const idx = event["contentIndex"];
+      if (disabledIndices.has(idx)) {
+        return;
+      }
+      const nextPartialJson = (partialJsonByIndex.get(idx) ?? "") + event["delta"];
+      if (nextPartialJson.length > MAX_TOOLCALL_REPAIR_BUFFER_CHARS) {
+        partialJsonByIndex.delete(idx);
+        repairedArgsByIndex.delete(idx);
+        disabledIndices.add(idx);
+        return;
+      }
+      partialJsonByIndex.set(idx, nextPartialJson);
+      if (shouldAttemptMalformedToolCallRepair(nextPartialJson, event["delta"])) {
+        const repair = tryParseMalformedToolCallArguments(nextPartialJson);
+        if (repair) {
+          repairedArgsByIndex.set(idx, repair.args);
+          repairToolCallArgumentsInMessage(event["partial"], idx, repair.args);
+          repairToolCallArgumentsInMessage(event["message"], idx, repair.args);
+          if (!loggedRepairIndices.has(idx)) {
+            loggedRepairIndices.add(idx);
+            log.warn(
+              `repairing kimi-coding tool call arguments after ${repair.trailingSuffix.length} trailing chars`,
+            );
           }
-          return result;
-        },
-        async return(value?: unknown) {
-          return iterator.return?.(value) ?? { done: true as const, value: undefined };
-        },
-        async throw(error?: unknown) {
-          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
-        },
-      };
-    };
-
+        } else {
+          repairedArgsByIndex.delete(idx);
+          clearToolCallArgumentsInMessage(event["partial"], idx);
+          clearToolCallArgumentsInMessage(event["message"], idx);
+        }
+      }
+    }
+    if (
+      typeof event["contentIndex"] === "number" &&
+      Number.isInteger(event["contentIndex"]) &&
+      event["type"] === "toolcall_end"
+    ) {
+      const idx = event["contentIndex"];
+      const repairedArgs = repairedArgsByIndex.get(idx);
+      if (repairedArgs) {
+        if (event["toolCall"] && typeof event["toolCall"] === "object") {
+          (event["toolCall"] as { arguments?: unknown }).arguments = repairedArgs;
+        }
+        repairToolCallArgumentsInMessage(event["partial"], idx, repairedArgs);
+        repairToolCallArgumentsInMessage(event["message"], idx, repairedArgs);
+      }
+      partialJsonByIndex.delete(idx);
+      disabledIndices.delete(idx);
+      loggedRepairIndices.delete(idx);
+    }
+  });
   return stream;
 }
 
 export function wrapStreamFnRepairMalformedToolCallArguments(baseFn: StreamFn): StreamFn {
-  return (model, context, options) => {
-    const maybeStream = baseFn(model, context, options);
-    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then((stream) =>
-        wrapStreamRepairMalformedToolCallArguments(stream),
-      );
-    }
-    return wrapStreamRepairMalformedToolCallArguments(maybeStream);
-  };
+  return makeStreamFnWrapper(baseFn, wrapStreamRepairMalformedToolCallArguments);
 }
 
 function shouldRepairMalformedAnthropicToolCallArguments(provider?: string): boolean {
@@ -1133,42 +1123,73 @@ function wrapStreamDecodeXaiToolCallArguments(
     decodeXaiToolCallArgumentsInMessage(message);
     return message;
   };
-
-  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
-  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
-    function () {
-      const iterator = originalAsyncIterator();
-      return {
-        async next() {
-          const result = await iterator.next();
-          if (!result.done && result.value && typeof result.value === "object") {
-            const event = result.value as { partial?: unknown; message?: unknown };
-            decodeXaiToolCallArgumentsInMessage(event.partial);
-            decodeXaiToolCallArgumentsInMessage(event.message);
-          }
-          return result;
-        },
-        async return(value?: unknown) {
-          return iterator.return?.(value) ?? { done: true as const, value: undefined };
-        },
-        async throw(error?: unknown) {
-          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
-        },
-      };
-    };
+  patchStreamAsyncIterator(stream, (event) => {
+    decodeXaiToolCallArgumentsInMessage(event["partial"]);
+    decodeXaiToolCallArgumentsInMessage(event["message"]);
+  });
   return stream;
 }
 
 function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
-  return (model, context, options) => {
-    const maybeStream = baseFn(model, context, options);
-    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then((stream) =>
-        wrapStreamDecodeXaiToolCallArguments(stream),
-      );
-    }
-    return wrapStreamDecodeXaiToolCallArguments(maybeStream);
-  };
+  return makeStreamFnWrapper(baseFn, wrapStreamDecodeXaiToolCallArguments);
+}
+
+// ---------------------------------------------------------------------------
+// runEmbeddedAttempt — extracted helpers
+// ---------------------------------------------------------------------------
+// TODO(p2-02-god-function): Further decompose runEmbeddedAttempt into:
+//   - buildAttemptContext(params, effectiveWorkspace, sandbox)
+//       → skills, bootstrap files, system prompt params, tools creation
+//   - createAndConfigureSession(context, settingsManager, resourceLoader)
+//       → createAgentSession + streamFn assignment + extraParams
+//   - executePromptLoop(session, prompt, opts)
+//       → subscribeEmbeddedPiSession + prompt + compaction retry
+//   - finalizeAttemptResult(snapshot, subscription, opts)
+//       → hook calls + EmbeddedRunAttemptResult assembly
+// The function shares extensive mutable state (session, systemPromptText, etc.)
+// which requires a context object pattern before these extractions can land safely.
+
+/**
+ * Applies all stream-function wrappers to the active session's agent in the correct order:
+ * 1. Trim whitespace from tool call names (all providers)
+ * 2. Repair malformed Kimi-Coding tool call arguments (anthropic-messages only)
+ * 3. Decode HTML entities in xAI/Grok tool call arguments
+ * 4. Anthropic payload logger (when enabled)
+ *
+ * Extracted from runEmbeddedAttempt to reduce nesting depth.
+ */
+function applyStreamFnWrappers(
+  agent: { streamFn: StreamFn },
+  opts: {
+    allowedToolNames: Set<string>;
+    modelApi: string | undefined;
+    provider: string;
+    modelId: string;
+    anthropicPayloadLogger: { wrapStreamFn: (fn: StreamFn) => StreamFn } | null | undefined;
+  },
+): void {
+  // Trim whitespace from tool call names (e.g. " read " → "read").
+  // pi-agent-core dispatches tool calls with exact string matching, so normalize
+  // names on the live response stream before tool execution.
+  agent.streamFn = wrapStreamFnTrimToolCallNames(agent.streamFn, opts.allowedToolNames);
+
+  // Repair malformed Kimi-Coding tool call arguments (kimi-coding via anthropic-messages API).
+  if (
+    opts.modelApi === "anthropic-messages" &&
+    shouldRepairMalformedAnthropicToolCallArguments(opts.provider)
+  ) {
+    agent.streamFn = wrapStreamFnRepairMalformedToolCallArguments(agent.streamFn);
+  }
+
+  // Decode HTML entities in xAI/Grok tool call arguments.
+  if (isXaiProvider(opts.provider, opts.modelId)) {
+    agent.streamFn = wrapStreamFnDecodeXaiToolCallArguments(agent.streamFn);
+  }
+
+  // Anthropic payload logger (diagnostic — wraps last so it sees the final stream).
+  if (opts.anthropicPayloadLogger) {
+    agent.streamFn = opts.anthropicPayloadLogger.wrapStreamFn(agent.streamFn);
+  }
 }
 
 export async function resolvePromptBuildHookResult(params: {
@@ -1381,7 +1402,6 @@ export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
-  const prevCwd = process.cwd();
   const runAbortController = new AbortController();
   // Proxy bootstrap must happen before timeout tuning so the timeouts wrap the
   // active EnvHttpProxyAgent instead of being replaced by a bare proxy dispatcher.
@@ -1408,7 +1428,8 @@ export async function runEmbeddedAttempt(
   await fs.mkdir(effectiveWorkspace, { recursive: true });
 
   let restoreSkillEnv: (() => void) | undefined;
-  process.chdir(effectiveWorkspace);
+  // NOTE: process.chdir() was removed — it mutated global CWD and caused race conditions
+  // when multiple agents ran concurrently. All paths now use absolute paths (effectiveWorkspace).
   try {
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveWorkspace,
@@ -1625,11 +1646,10 @@ export async function runEmbeddedAttempt(
       config: params.config,
       agentId: sessionAgentId,
       workspaceDir: effectiveWorkspace,
-      cwd: process.cwd(),
+      cwd: effectiveWorkspace,
       runtime: {
         host: machineName,
         os: `${os.type()} ${os.release()}`,
-        arch: os.arch(),
         node: process.version,
         model: `${params.provider}/${params.modelId}`,
         defaultModel: defaultModelLabel,
@@ -1644,7 +1664,7 @@ export async function runEmbeddedAttempt(
     const docsPath = await resolveOpenClawDocsPath({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
-      cwd: process.cwd(),
+      cwd: effectiveWorkspace,
       moduleUrl: import.meta.url,
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
@@ -2045,34 +2065,13 @@ export async function runEmbeddedAttempt(
         return innerStreamFn(model, context, options);
       };
 
-      // Some models emit tool names with surrounding whitespace (e.g. " read ").
-      // pi-agent-core dispatches tool calls with exact string matching, so normalize
-      // names on the live response stream before tool execution.
-      activeSession.agent.streamFn = wrapStreamFnTrimToolCallNames(
-        activeSession.agent.streamFn,
+      applyStreamFnWrappers(activeSession.agent, {
         allowedToolNames,
-      );
-
-      if (
-        params.model.api === "anthropic-messages" &&
-        shouldRepairMalformedAnthropicToolCallArguments(params.provider)
-      ) {
-        activeSession.agent.streamFn = wrapStreamFnRepairMalformedToolCallArguments(
-          activeSession.agent.streamFn,
-        );
-      }
-
-      if (isXaiProvider(params.provider, params.modelId)) {
-        activeSession.agent.streamFn = wrapStreamFnDecodeXaiToolCallArguments(
-          activeSession.agent.streamFn,
-        );
-      }
-
-      if (anthropicPayloadLogger) {
-        activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
-          activeSession.agent.streamFn,
-        );
-      }
+        modelApi: params.model.api,
+        provider: params.provider,
+        modelId: params.modelId,
+        anthropicPayloadLogger,
+      });
 
       try {
         const prior = await sanitizeSessionHistory({
@@ -2871,6 +2870,5 @@ export async function runEmbeddedAttempt(
     }
   } finally {
     restoreSkillEnv?.();
-    process.chdir(prevCwd);
   }
 }

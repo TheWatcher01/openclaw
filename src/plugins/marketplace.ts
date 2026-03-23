@@ -554,6 +554,25 @@ async function loadMarketplace(params: {
   };
 }
 
+function validatePluginUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Invalid plugin URL: ${url}`);
+  }
+  if (!["https:", "http:"].includes(parsed.protocol)) {
+    throw new Error(`Plugin URL must use HTTP(S) scheme, got: ${parsed.protocol}`);
+  }
+  // Block private/link-local/metadata IPs
+  const hostname = parsed.hostname;
+  const blocked =
+    /^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|0\.|::1$|fc00:|fe80:|localhost$)/i;
+  if (blocked.test(hostname)) {
+    throw new Error(`Plugin URL targets private/internal address: ${hostname}`);
+  }
+}
+
 async function downloadUrlToTempFile(url: string): Promise<
   | {
       ok: true;
@@ -565,6 +584,7 @@ async function downloadUrlToTempFile(url: string): Promise<
       error: string;
     }
 > {
+  validatePluginUrl(url);
   const response = await fetch(url);
   if (!response.ok) {
     return { ok: false, error: `failed to download ${url}: HTTP ${response.status}` };

@@ -120,6 +120,8 @@ function buildCoreDistEntries(): Record<string, string> {
     "cli/daemon-cli": "src/cli/daemon-cli.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
     extensionAPI: "src/extensionAPI.ts",
+    // Plugin runtime loaded dynamically by jiti; must exist as dist/plugins/runtime/index.js.
+    "plugins/runtime/index": "src/plugins/runtime/index.ts",
     // Keep sync lazy-runtime channel modules as concrete dist files.
     "channels/plugins/agent-tools/whatsapp-login":
       "src/channels/plugins/agent-tools/whatsapp-login.ts",

@@ -441,7 +441,7 @@ async function prepareManualRun(
     // force-reload from disk cannot start the same job concurrently.
     await persist(state);
     emit(state, { jobId: job.id, action: "started", runAtMs: preflight.now });
-    const executionJob = JSON.parse(JSON.stringify(job)) as CronJob;
+    const executionJob = structuredClone(job);
     return {
       ok: true,
       ran: true,

@@ -88,6 +88,20 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
 
 const log = createSubsystemLogger("memory");
 
+// Guard: test flags forbidden in production — must never be active outside a dev/test environment.
+if (process.env.NODE_ENV === "production") {
+  const unsafeTestFlags = ["OPENCLAW_TEST_FAST", "OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX"].filter(
+    (flag) => process.env[flag] === "1",
+  );
+
+  if (unsafeTestFlags.length > 0) {
+    throw new Error(
+      `[SECURITY] Test flags active in production environment: ${unsafeTestFlags.join(", ")}. ` +
+        `Remove these from your environment variables.`,
+    );
+  }
+}
+
 function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
   const normalized = path.normalize(watchPath);
   const parts = normalized.split(path.sep).map((segment) => segment.trim().toLowerCase());

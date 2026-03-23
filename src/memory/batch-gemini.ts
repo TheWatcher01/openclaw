@@ -214,7 +214,14 @@ function parseGeminiBatchOutput(text: string): GeminiBatchOutputLine[] {
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
-    .map((line) => JSON.parse(line) as GeminiBatchOutputLine);
+    .map((line) => {
+      try {
+        return JSON.parse(line) as GeminiBatchOutputLine;
+      } catch {
+        return null; // ligne malformée ignorée
+      }
+    })
+    .filter((item): item is GeminiBatchOutputLine => item !== null);
 }
 
 async function waitForGeminiBatch(params: {

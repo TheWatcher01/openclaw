@@ -1,3 +1,9 @@
 {
-  "recommendations": ["oxc.oxc-vscode"]
+  "recommendations": [
+    "oxc.oxc-vscode",
+    "usernamehw.errorlens",
+    "eamodio.gitlens",
+    "ryanluker.vscode-coverage-gutters",
+    "oderwat.indent-rainbow"
+  ]
 }
