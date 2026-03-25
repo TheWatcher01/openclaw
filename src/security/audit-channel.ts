@@ -7,23 +7,34 @@ import type { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { CHANNEL } from "../config/channel-names.js";
 import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { SecurityAuditFinding, SecurityAuditSeverity } from "./audit.js";
 import { resolveDmAllowState } from "./dm-policy-shared.js";
 
-let auditChannelRuntimeModulePromise:
-  | Promise<typeof import("./audit-channel.runtime.js")>
-  | undefined;
+const loadAuditChannelDiscordRuntimeModule = createLazyRuntimeSurface(
+  () => import("./audit-channel.discord.runtime.js"),
+  ({ auditChannelDiscordRuntime }) => auditChannelDiscordRuntime,
+);
 
-function loadAuditChannelRuntimeModule() {
-  auditChannelRuntimeModulePromise ??= import("./audit-channel.runtime.js");
-  return auditChannelRuntimeModulePromise;
-}
+const loadAuditChannelAllowFromRuntimeModule = createLazyRuntimeSurface(
+  () => import("./audit-channel.allow-from.runtime.js"),
+  ({ auditChannelAllowFromRuntime }) => auditChannelAllowFromRuntime,
+);
+
+const loadAuditChannelTelegramRuntimeModule = createLazyRuntimeSurface(
+  () => import("./audit-channel.telegram.runtime.js"),
+  ({ auditChannelTelegramRuntime }) => auditChannelTelegramRuntime,
+);
+
+const loadAuditChannelZalouserRuntimeModule = createLazyRuntimeSurface(
+  () => import("./audit-channel.zalouser.runtime.js"),
+  ({ auditChannelZalouserRuntime }) => auditChannelZalouserRuntime,
+);
 
 function normalizeAllowFromList(list: Array<string | number> | undefined | null): string[] {
   return normalizeStringEntries(Array.isArray(list) ? list : undefined);
@@ -75,7 +86,7 @@ async function collectInvalidTelegramAllowFromEntries(params: {
     return;
   }
   const { isNumericTelegramUserId, normalizeTelegramAllowFromEntry } =
-    await loadAuditChannelRuntimeModule();
+    await loadAuditChannelTelegramRuntimeModule();
   for (const entry of params.entries) {
     const normalized = normalizeTelegramAllowFromEntry(entry);
     if (!normalized || normalized === "*") {
@@ -139,6 +150,16 @@ function hasExplicitProviderAccountConfig(
     return false;
   }
   return Object.hasOwn(accounts, accountId);
+}
+
+function formatChannelAccountNote(params: {
+  orderedAccountIds: string[];
+  hasExplicitAccountPath: boolean;
+  accountId: string;
+}): string {
+  return params.orderedAccountIds.length > 1 || params.hasExplicitAccountPath
+    ? ` (account: ${params.accountId})`
+    : "";
 }
 
 export async function collectChannelSecurityFindings(params: {
@@ -374,8 +395,11 @@ export async function collectChannelSecurityFindings(params: {
       const accountConfig = (account as { config?: Record<string, unknown> } | null | undefined)
         ?.config;
       if (isDangerousNameMatchingEnabled(accountConfig)) {
-        const accountNote =
-          orderedAccountIds.length > 1 || hasExplicitAccountPath ? ` (account: ${accountId})` : "";
+        const accountNote = formatChannelAccountNote({
+          orderedAccountIds,
+          hasExplicitAccountPath,
+          accountId,
+        });
         findings.push({
           checkId: `channels.${plugin.id}.allowFrom.dangerous_name_matching_enabled`,
           severity: "info",
@@ -387,15 +411,36 @@ export async function collectChannelSecurityFindings(params: {
         });
       }
 
-      if (plugin.id === CHANNEL.DISCORD) {
-        const { isDiscordMutableAllowEntry, readChannelAllowFromStore } =
-          await loadAuditChannelRuntimeModule();
+      if (
+        plugin.id === "synology-chat" &&
+        (account as { dangerouslyAllowNameMatching?: unknown } | null)
+          ?.dangerouslyAllowNameMatching === true
+      ) {
+        const accountNote = formatChannelAccountNote({
+          orderedAccountIds,
+          hasExplicitAccountPath,
+          accountId,
+        });
+        findings.push({
+          checkId: "channels.synology-chat.reply.dangerous_name_matching_enabled",
+          severity: "info",
+          title: `Synology Chat dangerous name matching is enabled${accountNote}`,
+          detail:
+            "dangerouslyAllowNameMatching=true re-enables mutable username/nickname matching for reply delivery. This is a break-glass compatibility mode, not a hardened default.",
+          remediation:
+            "Prefer stable numeric Synology Chat user IDs for reply delivery, then disable dangerouslyAllowNameMatching.",
+        });
+      }
+
+      if (plugin.id === "discord") {
+        const { isDiscordMutableAllowEntry } = await loadAuditChannelDiscordRuntimeModule();
+        const { readChannelAllowFromStore } = await loadAuditChannelAllowFromRuntimeModule();
         const discordCfg =
           (account as { config?: Record<string, unknown> } | null)?.config ??
           ({} as Record<string, unknown>);
         const dangerousNameMatchingEnabled = isDangerousNameMatchingEnabled(discordCfg);
         const storeAllowFrom = await readChannelAllowFromStore(
-          CHANNEL.DISCORD,
+          "discord",
           process.env,
           accountId,
         ).catch(() => []);
@@ -477,14 +522,14 @@ export async function collectChannelSecurityFindings(params: {
           });
         }
         const nativeEnabled = resolveNativeCommandsEnabled({
-          providerId: CHANNEL.DISCORD,
+          providerId: "discord",
           providerSetting: coerceNativeSetting(
             (discordCfg.commands as { native?: unknown } | undefined)?.native,
           ),
           globalSetting: params.cfg.commands?.native,
         });
         const nativeSkillsEnabled = resolveNativeSkillsEnabled({
-          providerId: CHANNEL.DISCORD,
+          providerId: "discord",
           providerSetting: coerceNativeSetting(
             (discordCfg.commands as { nativeSkills?: unknown } | undefined)?.nativeSkills,
           ),
@@ -559,7 +604,7 @@ export async function collectChannelSecurityFindings(params: {
       }
 
       if (plugin.id === "zalouser") {
-        const { isZalouserMutableGroupEntry } = await loadAuditChannelRuntimeModule();
+        const { isZalouserMutableGroupEntry } = await loadAuditChannelZalouserRuntimeModule();
         const zalouserCfg =
           (account as { config?: Record<string, unknown> } | null)?.config ??
           ({} as Record<string, unknown>);
@@ -599,20 +644,20 @@ export async function collectChannelSecurityFindings(params: {
         }
       }
 
-      if (plugin.id === CHANNEL.SLACK) {
-        const { readChannelAllowFromStore } = await loadAuditChannelRuntimeModule();
+      if (plugin.id === "slack") {
+        const { readChannelAllowFromStore } = await loadAuditChannelAllowFromRuntimeModule();
         const slackCfg =
           (account as { config?: Record<string, unknown>; dm?: Record<string, unknown> } | null)
             ?.config ?? ({} as Record<string, unknown>);
         const nativeEnabled = resolveNativeCommandsEnabled({
-          providerId: CHANNEL.SLACK,
+          providerId: "slack",
           providerSetting: coerceNativeSetting(
             (slackCfg.commands as { native?: unknown } | undefined)?.native,
           ),
           globalSetting: params.cfg.commands?.native,
         });
         const nativeSkillsEnabled = resolveNativeSkillsEnabled({
-          providerId: CHANNEL.SLACK,
+          providerId: "slack",
           providerSetting: coerceNativeSetting(
             (slackCfg.commands as { nativeSkills?: unknown } | undefined)?.nativeSkills,
           ),
@@ -649,7 +694,7 @@ export async function collectChannelSecurityFindings(params: {
                 ? legacyAllowFromRaw
                 : [];
             const storeAllowFrom = await readChannelAllowFromStore(
-              CHANNEL.SLACK,
+              "slack",
               process.env,
               accountId,
             ).catch(() => []);
@@ -716,7 +761,7 @@ export async function collectChannelSecurityFindings(params: {
         }
       }
 
-      if (plugin.id !== CHANNEL.TELEGRAM) {
+      if (plugin.id !== "telegram") {
         continue;
       }
 
@@ -739,13 +784,13 @@ export async function collectChannelSecurityFindings(params: {
         continue;
       }
 
-      const { readChannelAllowFromStore } = await loadAuditChannelRuntimeModule();
+      const { readChannelAllowFromStore } = await loadAuditChannelAllowFromRuntimeModule();
       const storeAllowFrom = await readChannelAllowFromStore(
-        CHANNEL.TELEGRAM,
+        "telegram",
         process.env,
         accountId,
       ).catch(() => []);
-      const storeHasWildcard = storeAllowFrom.some((v) => String(v).trim() === "*");
+      const storeHasWildcard = storeAllowFrom.some((value) => String(value).trim() === "*");
       const invalidTelegramAllowFromEntries = new Set<string>();
       await collectInvalidTelegramAllowFromEntries({
         entries: storeAllowFrom,
@@ -839,7 +884,7 @@ export async function collectChannelSecurityFindings(params: {
           // oxlint-disable-next-line typescript/no-explicit-any
           ?.nativeSkills as any;
         const skillsEnabled = resolveNativeSkillsEnabled({
-          providerId: CHANNEL.TELEGRAM,
+          providerId: "telegram",
           providerSetting,
           globalSetting: params.cfg.commands?.nativeSkills,
         });
