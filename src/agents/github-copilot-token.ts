@@ -113,6 +113,9 @@ export async function resolveCopilotApiToken(params: {
     headers: {
       Accept: "application/json",
       Authorization: `Bearer ${params.githubToken}`,
+      "Editor-Version": "vscode/1.96.2",
+      "Editor-Plugin-Version": "copilot/1.0.0",
+      "User-Agent": "GitHubCopilotChat/0.26.7",
     },
   });
 

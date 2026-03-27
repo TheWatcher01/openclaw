@@ -321,7 +321,7 @@ export function applyExtraParamsToAgent(
     resolvedExtraParams,
   });
 
-  if (provider === "openai" || provider === "openai-codex") {
+  if (provider === "openai" || provider === "openai-codex" || provider === "github-copilot") {
     if (provider === "openai") {
       // Default OpenAI Responses to WebSocket-first with transparent SSE fallback.
       agent.streamFn = createOpenAIDefaultTransportWrapper(agent.streamFn);

@@ -98,6 +98,26 @@ function buildOpenAICodexAttributionPolicy(
   };
 }
 
+function buildGitHubCopilotAttributionPolicy(
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+): ProviderAttributionPolicy {
+  const identity = resolveProviderAttributionIdentity(env);
+  return {
+    provider: "github-copilot",
+    enabledByDefault: true,
+    verification: "vendor-documented",
+    hook: "request-headers",
+    reviewNote:
+      "GitHub Copilot API requires Editor-Version header for IDE auth tokens. Without it, returns HTTP 400.",
+    ...identity,
+    headers: {
+      "Editor-Version": "vscode/1.96.2",
+      "Editor-Plugin-Version": "copilot/1.0.0",
+      "User-Agent": "GitHubCopilotChat/0.26.7",
+    },
+  };
+}
+
 function buildSdkHookOnlyPolicy(
   provider: string,
   hook: ProviderAttributionHook,
@@ -121,6 +141,7 @@ export function listProviderAttributionPolicies(
     buildOpenRouterAttributionPolicy(env),
     buildOpenAIAttributionPolicy(env),
     buildOpenAICodexAttributionPolicy(env),
+    buildGitHubCopilotAttributionPolicy(env),
     buildSdkHookOnlyPolicy(
       "anthropic",
       "default-headers",

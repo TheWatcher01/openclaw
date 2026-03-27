@@ -59,7 +59,7 @@ function shouldApplyOpenAIAttributionHeaders(model: {
   api?: unknown;
   provider?: unknown;
   baseUrl?: unknown;
-}): "openai" | "openai-codex" | undefined {
+}): "openai" | "openai-codex" | "github-copilot" | undefined {
   if (
     model.provider === "openai" &&
     (model.api === "openai-completions" || model.api === "openai-responses") &&
@@ -73,6 +73,9 @@ function shouldApplyOpenAIAttributionHeaders(model: {
     isOpenAICodexBaseUrl(model.baseUrl)
   ) {
     return "openai-codex";
+  }
+  if (model.provider === "github-copilot") {
+    return "github-copilot";
   }
   return undefined;
 }
