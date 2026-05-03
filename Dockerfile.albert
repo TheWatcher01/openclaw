@@ -1,0 +1,124 @@
+# Dockerfile.albert — Image OpenClaw enrichie pour Albert
+# Basée sur l'image OpenClaw standard, ajoute :
+# - Outils OSINT (subfinder, nuclei, katana, httpx-pd, theHarvester, holehe, maigret)
+# - Outils réseau (nmap, dnsutils, whois, traceroute)
+# - Python ML/DB stack (scikit-learn, lancedb, kuzu, sentence-transformers, spacy, folium)
+# - uv (PEP 723 Python runner)
+# - Chromium headless + Playwright
+# - jq
+# - GitHub CLI (gh), tmux, ffmpeg
+# - himalaya (email IMAP/SMTP)
+# - npm skill CLIs (clawhub, nano-pdf, blogwatcher, mcporter, gog-cli, session-logs,
+#   codexbar, summon-cli, xurl, oracle-cli)
+
+# ── Étape 1 : Construire l'image OpenClaw standard ──────────────────
+FROM openclaw:local AS base
+
+USER root
+
+# ── Étape 2 : Paquets système ────────────────────────────────────────
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      # Parsing & utils
+      jq \
+      python3-pip python3-venv python3-dev \
+      # Réseau & OSINT
+      nmap \
+      dnsutils \
+      whois \
+      netcat-openbsd \
+      traceroute \
+      # GeoIP
+      geoip-bin \
+      # Build deps pour libs natives
+      gcc g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Étape 3 : uv (Python PEP 723 runner) ────────────────────────────
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
+
+# ── Étape 4 : Outils OSINT Go (projectdiscovery) ────────────────────
+# Utilise les scripts d'installation officiels de ProjectDiscovery
+# Chaque outil est installé indépendamment (non-bloquant si un échoue)
+RUN for tool in subfinder httpx nuclei katana; do \
+      echo "Installing $tool..." && \
+      curl -sSfL "https://raw.githubusercontent.com/projectdiscovery/pdtm/main/scripts/install.sh" | \
+        sh -s -- -tool "$tool" -dest /usr/local/bin 2>/dev/null || \
+        echo "WARNING: $tool installation failed (non-fatal)"; \
+    done
+
+# ── Étape 5 : Outils OSINT Python ───────────────────────────────────
+RUN uv tool install theHarvester && \
+    uv tool install holehe && \
+    uv tool install maigret && \
+    uv tool install shodan || true
+ENV PATH="/root/.local/bin:${PATH}"
+
+# ── Étape 6 : Libs ML/DB Python (pré-cache pour uv run) ─────────────
+# On crée un venv partagé pour les libs lourdes (évite re-téléchargement à chaque uv run)
+RUN uv venv /opt/albert-ml && \
+    uv pip install --python /opt/albert-ml/bin/python \
+      lancedb \
+      kuzu \
+      scikit-learn \
+      sentence-transformers \
+      spacy \
+      networkx \
+      folium \
+      httpx \
+    && /opt/albert-ml/bin/python -m spacy download fr_core_news_lg || true
+ENV ALBERT_ML_VENV=/opt/albert-ml
+
+# ── Étape 7 : Chromium headless + Playwright ────────────────────────
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb && \
+    mkdir -p /home/node/.cache/ms-playwright && \
+    PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright \
+    node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
+    chown -R node:node /home/node/.cache/ms-playwright && \
+    rm -rf /var/lib/apt/lists/*
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
+
+# ── Étape 8 : GitHub CLI (gh) + outils système supplémentaires ───────
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      gh \
+      tmux \
+      ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Étape 9 : himalaya (email IMAP/SMTP CLI) ────────────────────────
+RUN curl -sSfL https://github.com/pimalaya/himalaya/releases/latest/download/himalaya.x86_64-linux.tgz \
+      | tar xz -C /usr/local/bin/ && \
+    chmod +x /usr/local/bin/himalaya
+
+# ── Étape 10 : CLIs npm pour skills OpenClaw ─────────────────────────
+# Each install is fault-tolerant — some packages may not exist on public npm
+RUN for pkg in clawhub nano-pdf mcporter gog-cli oracle-cli xurl codexbar summon-cli session-logs blogwatcher dev-browser; do \
+      echo "Installing $pkg..." && npm install -g "$pkg" 2>/dev/null || echo "SKIP: $pkg not found (non-fatal)"; \
+    done
+
+# ── dev-browser : install Playwright Chromium (réutilise le cache existant) ──
+# PLAYWRIGHT_BROWSERS_PATH est déjà défini — pas de double téléchargement
+RUN dev-browser install 2>/dev/null || echo "SKIP: dev-browser install (non-fatal)"
+
+# ── Étape 11 : Claude Code CLI + GitHub Copilot CLI ──────────────────
+# Claude Code : headless via `claude -p "prompt" --print --permission-mode bypassPermissions`
+# Copilot CLI : headless via `copilot -p "prompt" --allow-all-tools`
+RUN npm install -g @anthropic-ai/claude-code 2>/dev/null || echo "SKIP: claude-code (non-fatal)" && \
+    npm install -g @github/copilot 2>/dev/null || echo "SKIP: copilot (non-fatal)"
+
+# ── Étape 12 : Permissions et cleanup ────────────────────────────────
+# Only fix ownership on /home/node (albert-ml is root-owned but world-readable by default)
+RUN chown -R node:node /home/node && \
+    chmod -R a+rX /opt/albert-ml/bin 2>/dev/null || true
+
+USER node
+
+# ── Métadonnées ──────────────────────────────────────────────────────
+LABEL org.opencontainers.image.title="OpenClaw Albert" \
+  org.opencontainers.image.description="OpenClaw gateway enrichi pour Albert — OSINT, ML, Browser headless, GitHub CLI, email, audio/video, npm skill CLIs"
